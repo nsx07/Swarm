@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using Serilog;
 using Swarm.Cluster.Data;
 using Swarm.Cluster.Models;
+using Swarm.Cluster.Models.Dto;
 using System.Text.Json;
 
 namespace Swarm.Cluster.Services;
@@ -11,48 +13,60 @@ namespace Swarm.Cluster.Services;
 public class NodeService
 {
     private readonly ClusterDbContext _dbContext;
-    private readonly CacheService _cacheService;
     private readonly ILogger<NodeService> _logger;
-    private const int HeartbeatTimeoutSeconds = 60;
+    private readonly IConfiguration _config;
+    private const int HeartbeatTimeoutSeconds = 300;
 
-    public NodeService(ClusterDbContext dbContext, CacheService cacheService, ILogger<NodeService> logger)
+    public NodeService(ClusterDbContext dbContext, ILogger<NodeService> logger, IConfiguration config)
     {
         _dbContext = dbContext;
-        _cacheService = cacheService;
         _logger = logger;
+        _config = config;
     }
 
     /// <summary>
     /// Register a new node with capabilities
     /// </summary>
-    public async Task<(Guid NodeId, string ApiKey)> RegisterNodeAsync(string nodeName, Dictionary<string, object> capabilities, Dictionary<string, string>? environmentTags = null)
+    public async Task<RequestNodeRegistrationResponse> RegisterNodeAsync(string apiKey, Guid? nodeId, Dictionary<string, string>? environmentTags = null)
     {
-        _logger.LogInformation("Registering node: {NodeName}", nodeName);
+        _logger.LogInformation("Registering node: {NodeName}", nodeId);
 
-        // Generate API key
-        var apiKey = GenerateApiKey();
+        var existentNodeByName = await _dbContext.Nodes.Where(x => x.Id == nodeId).Select(x => x.Name).FirstOrDefaultAsync();
 
         var node = new Node
         {
-            Id = Guid.NewGuid(),
-            Name = nodeName,
-            ApiKey = apiKey,
+            Id = nodeId ?? Guid.NewGuid(),
+            Name = existentNodeByName != null ? existentNodeByName : GenerateNodeName(),
             Status = "online",
             CreatedAt = DateTime.UtcNow,
             LastHeartbeatAt = DateTime.UtcNow,
-            CapabilitiesJson = JsonSerializer.Serialize(capabilities),
             EnvironmentTagsJson = environmentTags != null ? JsonSerializer.Serialize(environmentTags) : null
         };
 
-        _dbContext.Nodes.Add(node);
+        if (existentNodeByName != null)
+        {
+            _dbContext.Nodes.Update(node);
+        } else
+        {
+            _dbContext.Nodes.Add(node);
+        }
+
         await _dbContext.SaveChangesAsync();
 
-        // Cache capabilities
-        await _cacheService.SetNodeCapabilitiesAsync(node.Id, capabilities);
+        _logger.LogInformation("Node registered successfully: {NodeId} ({NodeName})", node.Id, node.Name);
 
-        _logger.LogInformation("Node registered successfully: {NodeId} ({NodeName})", node.Id, nodeName);
-
-        return (node.Id, apiKey);
+        return new RequestNodeRegistrationResponse()
+        {
+            NodeId = node.Id.ToString(),
+            NodeName = node.Name,
+            QueueParameters = new()
+            {
+                QueuePort = _config["RabbitMQ:Port"]!,
+                QueueHost = _config["RabbitMQ:Hostname"]!,
+                QueuePassword = _config["RabbitMQ:Password"]!,
+                QueueUserName = _config["RabbitMQ:UserName"]!,
+            }
+        };
     }
 
     /// <summary>
@@ -101,26 +115,6 @@ public class NodeService
     }
 
     /// <summary>
-    /// Update node capabilities
-    /// </summary>
-    public async Task UpdateCapabilitiesAsync(Guid nodeId, Dictionary<string, object> capabilities)
-    {
-        var node = await _dbContext.Nodes.FindAsync(nodeId);
-        if (node == null)
-        {
-            throw new InvalidOperationException($"Node {nodeId} not found");
-        }
-
-        node.CapabilitiesJson = JsonSerializer.Serialize(capabilities);
-        await _dbContext.SaveChangesAsync();
-
-        // Update cache
-        await _cacheService.SetNodeCapabilitiesAsync(nodeId, capabilities);
-
-        _logger.LogInformation("Node capabilities updated: {NodeId}", nodeId);
-    }
-
-    /// <summary>
     /// Mark offline nodes based on heartbeat timeout
     /// </summary>
     public async Task MarkOfflineNodesAsync()
@@ -130,7 +124,7 @@ public class NodeService
             .Where(n => n.Status == "online" && n.LastHeartbeatAt < cutoffTime)
             .ToListAsync();
 
-        if (offlineNodes.Any())
+        if (offlineNodes.Count != 0)
         {
             foreach (var node in offlineNodes)
             {
@@ -143,33 +137,6 @@ public class NodeService
     }
 
     /// <summary>
-    /// Get nodes with specific capability
-    /// </summary>
-    public async Task<List<Node>> GetNodesWithCapabilityAsync(string capability)
-    {
-        var nodes = await GetNodesAsync("online");
-        var result = new List<Node>();
-
-        foreach (var node in nodes)
-        {
-            try
-            {
-                var capabilities = JsonSerializer.Deserialize<Dictionary<string, object>>(node.CapabilitiesJson);
-                if (capabilities != null && capabilities.ContainsKey(capability))
-                {
-                    result.Add(node);
-                }
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogError(ex, "Failed to parse capabilities for node {NodeId}", node.Id);
-            }
-        }
-
-        return result;
-    }
-
-    /// <summary>
     /// Delete a node
     /// </summary>
     public async Task DeleteNodeAsync(Guid nodeId)
@@ -179,7 +146,6 @@ public class NodeService
         {
             _dbContext.Nodes.Remove(node);
             await _dbContext.SaveChangesAsync();
-            await _cacheService.DeleteNodeCapabilitiesAsync(nodeId);
             _logger.LogInformation("Node deleted: {NodeId}", nodeId);
         }
     }
@@ -191,5 +157,32 @@ public class NodeService
     {
         return $"sk_{Guid.NewGuid().ToString().Replace("-", "").Substring(0, 32)}";
     }
-}
 
+    /// <summary>
+    /// Generate a random name for nodeId
+    /// </summary>
+    /// <returns></returns>
+    private string  GenerateNodeName()
+    {
+        Random random = new();
+        char[] consonants = "bcdfghjklmnpqrstvwx".ToCharArray();
+        char[] vowels = "aeiouy".ToCharArray();
+        string name = "";
+
+        _logger.LogInformation("{Consonants} - {Vowels}", consonants, vowels);
+
+        name += consonants[random.Next(consonants.Length - 1)];
+        name += vowels[random.Next(vowels.Length - 1)];
+        short b = 2;
+
+        while (b < 13)
+        {
+            name += consonants[random.Next(consonants.Length - 1)];
+            b++;
+            name += vowels[random.Next(vowels.Length - 1)];
+            b++;
+        }
+
+        return name;
+    }
+}

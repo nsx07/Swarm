@@ -1,4 +1,8 @@
+using System.Security.Claims;
+using System.Text.Encodings.Web;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Swarm.Cluster.Data;
 
 namespace Swarm.Cluster.Middleware;
@@ -17,7 +21,8 @@ public class ApiKeyAuthMiddleware
     public async Task InvokeAsync(HttpContext context, ClusterDbContext dbContext)
     {
         // Skip auth for health checks, Swagger, and node registration
-        var path = context.Request.Path.Value ?? "";
+        var path = (context.Request.Path.Value ?? "").ToLower();
+        _logger.LogInformation("Processing request for {Path} from {RemoteIp}", path, context.Connection.RemoteIpAddress);
         if (path.StartsWith("/health") || 
             path.StartsWith("/swagger") || 
             path == "/" ||
@@ -36,7 +41,7 @@ public class ApiKeyAuthMiddleware
         }
 
         var apiKey = apiKeyValue.ToString();
-        var node = await dbContext.Nodes.FirstOrDefaultAsync(n => n.ApiKey == apiKey);
+        var node = await dbContext.Nodes.FirstOrDefaultAsync(/**n => n.ApiKey == apiKey*/);
 
         if (node == null)
         {

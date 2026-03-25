@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Swarm.Cluster.Models;
+using Swarm.Cluster.Models.Dto;
 using Swarm.Cluster.Services;
 
 namespace Swarm.Cluster.Controllers;
@@ -21,22 +22,19 @@ public class NodesController : ControllerBase
     /// Register a new node
     /// </summary>
     [HttpPost("register")]
-    public async Task<ActionResult<NodeRegistrationResponse>> RegisterNode([FromBody] NodeRegistrationRequest request)
+    public async Task<ActionResult<RequestNodeRegistrationResponse>> RegisterNode(
+        [FromBody] NodeRegistrationRequest request, 
+        [FromHeader(Name = "X-Node-Id")] Guid nodeId,
+        [FromHeader(Name = "X-API-Key")] string apiKey
+    )
     {
-        _logger.LogInformation("Node registration request: {NodeName}", request.NodeName);
+        _logger.LogInformation("Node registration request: {NodeName}", nodeId);
 
-        var (nodeId, apiKey) = await _nodeService.RegisterNodeAsync(
-            request.NodeName,
-            request.Capabilities ?? new Dictionary<string, object>(),
+        return Ok(await _nodeService.RegisterNodeAsync(
+            apiKey,
+            nodeId,
             request.EnvironmentTags
-        );
-
-        return Ok(new NodeRegistrationResponse
-        {
-            NodeId = nodeId,
-            ApiKey = apiKey,
-            Message = "Node registered successfully"
-        });
+        ));
     }
 
     /// <summary>
@@ -65,7 +63,6 @@ public class NodesController : ControllerBase
             Id = n.Id,
             Name = n.Name,
             Status = n.Status,
-            CapabilitiesJson = n.CapabilitiesJson,
             LastHeartbeatAt = n.LastHeartbeatAt,
             CreatedAt = n.CreatedAt
         }).ToList();
@@ -93,33 +90,9 @@ public class NodesController : ControllerBase
             Id = node.Id,
             Name = node.Name,
             Status = node.Status,
-            CapabilitiesJson = node.CapabilitiesJson,
             LastHeartbeatAt = node.LastHeartbeatAt,
             CreatedAt = node.CreatedAt
         };
-
-        return Ok(response);
-    }
-
-    /// <summary>
-    /// Get nodes with a specific capability
-    /// </summary>
-    [HttpGet("capability/{capability}")]
-    public async Task<ActionResult<List<NodeResponse>>> GetNodesWithCapability(string capability)
-    {
-        _logger.LogInformation("Fetching nodes with capability: {Capability}", capability);
-        
-        var nodes = await _nodeService.GetNodesWithCapabilityAsync(capability);
-        
-        var response = nodes.Select(n => new NodeResponse
-        {
-            Id = n.Id,
-            Name = n.Name,
-            Status = n.Status,
-            CapabilitiesJson = n.CapabilitiesJson,
-            LastHeartbeatAt = n.LastHeartbeatAt,
-            CreatedAt = n.CreatedAt
-        }).ToList();
 
         return Ok(response);
     }
@@ -157,7 +130,6 @@ public class NodesController : ControllerBase
 // DTOs
 public class NodeRegistrationRequest
 {
-    public required string NodeName { get; set; }
     public Dictionary<string, object>? Capabilities { get; set; }
     public Dictionary<string, string>? EnvironmentTags { get; set; }
 }
