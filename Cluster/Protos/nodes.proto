@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package swarm.cluster.nodes;
+
+option csharp_namespace = "Swarm.Cluster.Services";
+
+service NodesService {
+  rpc RegisterNode (RegisterNodeRequest) returns (RegisterNodeResponse);
+  rpc RecordHeartbeat (RecordHeartbeatRequest) returns (RecordHeartbeatResponse);
+}
+
+message RegisterNodeRequest {
+  string api_key = 1;
+  string node_id = 2;
+  map<string, string> environment_tags = 3;
+}
+
+message RemoteParameters {
+  string queue_host = 1;
+  string queue_port = 2;
+  string queue_user_name = 3;
+  string queue_password = 4;
+}
+
+message RegisterNodeResponse {
+  string node_id = 1;
+  string node_name = 2;
+  RemoteParameters queue_parameters = 3;
+}
+
+message RecordHeartbeatRequest {
+  string node_id = 1;
+  string api_key = 2;
+}
+
+message RecordHeartbeatResponse {
+  bool success = 1;
+  string message = 2;
+}

@@ -3,6 +3,7 @@ using Swarm.Node;
 using Swarm.Node.Data;
 using Swarm.Node.Logging;
 using Swarm.Node.Services;
+using Grpc.Net.Client;
 
 var configuration = new ConfigurationBuilder()
     .SetBasePath(Directory.GetCurrentDirectory())
@@ -19,6 +20,18 @@ var builder = Host.CreateDefaultBuilder(args)
     {
         // Replace default logging with Serilog
         services.AddSerilog(Log.Logger);
+        
+        var clusterUrl = configuration["ClusterUrl"] ?? throw new InvalidOperationException("ClusterUrl is not configured");
+        
+        // Configure gRPC channel
+        services.AddSingleton(s => {
+            var httpHandler = new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
+            };
+
+            return GrpcChannel.ForAddress(clusterUrl, new GrpcChannelOptions { HttpHandler = httpHandler });
+        });
                 
         // Add services
         services.AddScoped<RegistrationService>();

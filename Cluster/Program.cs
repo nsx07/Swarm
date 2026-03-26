@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using Serilog;
 using Swarm.Cluster.Data;
+using Swarm.Cluster.GrpcServices;
 using Swarm.Cluster.Logging;
 using Swarm.Cluster.Middleware;
 using Swarm.Cluster.Services;
@@ -27,7 +28,15 @@ builder.Services.AddScoped<NodeService>();
 builder.Services.AddHostedService<HeartbeatBackgroundService>();
 
 builder.Services.AddControllers();
+builder.Services.AddGrpc();
 builder.Services.AddEndpointsApiExplorer();
+
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenLocalhost(5000, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2);
+    options.ListenLocalhost(5001, o => o.UseHttps());
+});
+
 builder.Services.AddSwaggerGen(gen =>
 {
     gen.AddSecurityDefinition("ApiKey", new OpenApiSecurityScheme
@@ -72,12 +81,14 @@ if (app.Environment.IsDevelopment() || true)
     app.UseSwaggerUI();
 }
 
+app.MapGrpcService<NodesGrpcService>();
+
 app.UseHttpsRedirection();
 app.UseCors("AllowFrontend");
 
 app.UseAuthentication();
 app.UseAuthorization();
-// app.UseMiddleware<ApiKeyAuthMiddleware>();
+app.UseMiddleware<ApiKeyAuthMiddleware>();
 
 app.MapControllers();
 

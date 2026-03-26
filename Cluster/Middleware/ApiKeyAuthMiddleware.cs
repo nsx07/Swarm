@@ -1,8 +1,6 @@
-using System.Security.Claims;
-using System.Text.Encodings.Web;
-using Microsoft.AspNetCore.Authentication;
+using System.Reflection;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
+using Swarm.Cluster.Attributes;
 using Swarm.Cluster.Data;
 
 namespace Swarm.Cluster.Middleware;
@@ -20,13 +18,24 @@ public class ApiKeyAuthMiddleware
 
     public async Task InvokeAsync(HttpContext context, ClusterDbContext dbContext)
     {
-        // Skip auth for health checks, Swagger, and node registration
         var path = (context.Request.Path.Value ?? "").ToLower();
         _logger.LogInformation("Processing request for {Path} from {RemoteIp}", path, context.Connection.RemoteIpAddress);
+        
+        // Skip auth for health checks, Swagger, root, and gRPC
         if (path.StartsWith("/health") || 
             path.StartsWith("/swagger") || 
             path == "/" ||
-            path == "/api/nodes/register")
+            context.Request.ContentType?.StartsWith("application/grpc") == true)
+        {
+            await _next(context);
+            return;
+        }
+
+        // Check if the endpoint requires API key authentication
+        var endpoint = context.GetEndpoint();
+        var hasApiKeyRequired = endpoint?.Metadata.GetOrderedMetadata<ApiKeyRequiredAttribute>().Any() ?? false;
+
+        if (!hasApiKeyRequired)
         {
             await _next(context);
             return;

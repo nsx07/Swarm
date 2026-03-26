@@ -4,58 +4,49 @@ using Microsoft.Data.Sqlite;
 using Swarm.Node.Data;
 using Swarm.Node.Extensions;
 using Swarm.Node.Models.Dto;
+using Grpc.Net.Client;
+using Swarm.Cluster.Services;
 
 namespace Swarm.Node.Services;
 
 /// <summary>
 /// Manages initial registration with cluster and periodic heartbeat
 /// </summary>
-public class RegistrationService(ILogger<RegistrationService> logger, IConfiguration configuration, AppDbConnection dbConnection, IHttpClientFactory httpFactory)
+public class RegistrationService(ILogger<RegistrationService> logger, IConfiguration configuration, AppDbConnection dbConnection, GrpcChannel grpcChannel)
 {
     private readonly ILogger<RegistrationService> _logger = logger;
     private readonly IConfiguration _configuration = configuration;
     private readonly AppDbConnection _dbConnection = dbConnection;
-    private readonly IHttpClientFactory _httpFactory = httpFactory;
-    private readonly string _clusterUrl = configuration["ClusterUrl"] ?? throw new InvalidOperationException("ClusterUrl is not configured");
+    private readonly GrpcChannel _grpcChannel = grpcChannel;
     private readonly string _nodeId = configuration["NodeId"] ?? throw new InvalidOperationException("NodeId is not configured");
     private readonly string _apiKey = configuration["ApiKey"] ?? throw new InvalidOperationException("ApiKey is not configured");
 
-    private static readonly JsonSerializerOptions _options = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true
-    };
-
     public async Task<bool> RegisterWithClusterAsync(Dictionary<string, object>? capabilities = null)
     {
-        _logger.LogInformation("Registering node with cluster");
+        _logger.LogInformation("Registering node with cluster via gRPC");
 
         try
         {
-            var httpClient = _httpFactory.CreateClient();
-            httpClient.DefaultRequestHeaders.Add("X-API-Key", _apiKey);
-            httpClient.DefaultRequestHeaders.Add("X-Node-Id", _nodeId);
+            var client = new NodesService.NodesServiceClient(_grpcChannel);
             
-            var envVars = _configuration.AsEnumerable().ToDictionary(kv => kv.Key, kv => kv.Value);
-            var payload = new
+            var envVars = _configuration.AsEnumerable()
+                .ToDictionary(kv => kv.Key, kv => kv.Value ?? "");
+            
+            var request = new RegisterNodeRequest
             {
-                EnvironmentTags = envVars,
-                Capabilities = capabilities
+                ApiKey = _apiKey,
+                NodeId = _nodeId,
+                EnvironmentTags = { envVars }
             };
 
-            var json = JsonSerializer.Serialize(payload, _options);
+            _logger.LogInformation("Sending registration request for node: {NodeId}", _nodeId);
+            
+            var response = await client.RegisterNodeAsync(request);
 
-            _logger.LogInformation("Registration payload: {Payload}", json);
-            var response = await httpClient.PostAsync($"{_clusterUrl}/api/Nodes/register", 
-                            new StringContent(json, System.Text.Encoding.UTF8, "application/json"));
+            _logger.LogInformation("Registration response: NodeId={NodeId}, NodeName={NodeName}", 
+                response.NodeId, response.NodeName);
 
-            var responseBody = await response.Content.ReadAsStringAsync();  
-            var registrationData = JsonSerializer.Deserialize<RegistrationRequestResponse>(responseBody, _options);      
-
-            _logger.LogInformation("Registration response status code: {StatusCode}", response.StatusCode);
-            _logger.LogInformation("Registration response content: {Content}", registrationData);
-
-            if (!response.IsSuccessStatusCode || registrationData == null || registrationData.NodeId.IsNullOrEmpty())
+            if (response?.NodeId.IsNullOrEmpty() ?? true)
             {
                 throw new InvalidOperationException("Node failed while retrieving configuration");
             }
@@ -70,16 +61,17 @@ public class RegistrationService(ILogger<RegistrationService> logger, IConfigura
                     VALUES ($1, $3, $4, $5, $6)
                 """;
 
-            command.Parameters.Add(new SqliteParameter("$1", registrationData.NodeId));
-            command.Parameters.Add(new SqliteParameter("$2", registrationData.NodeName));
-            command.Parameters.Add(new SqliteParameter("$3", registrationData.QueueParameters.QueueHost));
-            command.Parameters.Add(new SqliteParameter("$4", registrationData.QueueParameters.QueuePort));
-            command.Parameters.Add(new SqliteParameter("$5", registrationData.QueueParameters.QueueUserName));
-            command.Parameters.Add(new SqliteParameter("$6", registrationData.QueueParameters.QueuePassword));
+            command.Parameters.Add(new SqliteParameter("$1", response.NodeId));
+            command.Parameters.Add(new SqliteParameter("$2", response.NodeName));
+            command.Parameters.Add(new SqliteParameter("$3", response.QueueParameters.QueueHost));
+            command.Parameters.Add(new SqliteParameter("$4", response.QueueParameters.QueuePort));
+            command.Parameters.Add(new SqliteParameter("$5", response.QueueParameters.QueueUserName));
+            command.Parameters.Add(new SqliteParameter("$6", response.QueueParameters.QueuePassword));
             command.ExecuteNonQuery();
             
-            return response.IsSuccessStatusCode;
-        } catch (Exception ex)
+            return true;
+        } 
+        catch (Exception ex)
         {
             _logger.LogError(ex, "Error registering node with cluster");
             return false;
