@@ -32,7 +32,7 @@ public class HeartBeatService(IConfiguration configuration, GrpcChannel grpcChan
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error sending heartbeat to cluster");
-            return false;
+            throw;
         }
     }
 }

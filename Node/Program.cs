@@ -4,6 +4,7 @@ using Swarm.Node.Data;
 using Swarm.Node.Logging;
 using Swarm.Node.Services;
 using Grpc.Net.Client;
+using Swarm.Node.BackgroundServices;
 
 var configuration = new ConfigurationBuilder()
     .SetBasePath(Directory.GetCurrentDirectory())
@@ -12,8 +13,6 @@ var configuration = new ConfigurationBuilder()
     .Build();
 
 Log.Logger = SerilogConfiguration.CreateLogger(configuration);
-
-Log.Information("Starting Swarm Node worker service");
 
 var builder = Host.CreateDefaultBuilder(args)
     .ConfigureServices(services =>
@@ -34,21 +33,21 @@ var builder = Host.CreateDefaultBuilder(args)
         });
                 
         // Add services
+        services.AddSingleton<BackgroundMaestro>();
+        services.AddSingleton<AppDbConnection>();        
         services.AddScoped<RegistrationService>();
         services.AddScoped<HeartBeatService>();
-        services.AddSingleton<AppDbConnection>();        
 
         services.AddHttpClient();
         
         // Add worker
+        services.AddHostedService<StartupService>();
         services.AddHostedService<NodeWorker>();
 
         services.Configure<DataConfiguration>(configuration.GetSection("Database"));
     });
 
 var host = builder.Build();
-
-Log.Information("Node worker service started successfully");
 
 _ = Task.Run(async () =>
 {

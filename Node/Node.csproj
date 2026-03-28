@@ -6,6 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Swarm.Node</RootNamespace>
     <AssemblyName>Swarm.Node</AssemblyName>
+    <!-- supress warning NU1903,CS8618 -->
+    <NoWarn>NU1903;CS8618</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,7 +35,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="BackgroundServices\" />
     <Folder Include="Extensions\" />
     <Folder Include="Models\Dto\" />
     <Folder Include="Protos\" />
